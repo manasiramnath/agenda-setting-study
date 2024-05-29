@@ -1,0 +1,99 @@
+---
+title: "preliminary-analysis"
+author: '29678'
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# load libraries
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(quanteda)
+library(streamR)
+library(quanteda.textplots)
+```
+
+```{r}
+# load data
+all_news <- read.csv("/Volumes/Untitled/news/all-news.csv")
+all_reddit <- read.csv("/Volumes/Untitled/reddit/all-reddit.csv")
+```
+
+```{r}
+# convert date to date format
+all_news$date <- as.Date(all_news$date)
+all_reddit$date <- as.Date(all_reddit$date)
+
+# make day of year a column
+all_news$day_of_year <- yday(all_news$date)
+all_reddit$day_of_year <- yday(all_reddit$date)
+```
+
+1. Creating a corpus (News)
+```{r}
+# create a corpus
+news_corpus <- corpus(all_news$body, docvars = all_news[,c("day_of_year","news")])
+
+news_corpus <- tolower(news_corpus)
+
+# remove non-ACSII characters
+news_corpus <- gsub("[^[:alnum:][:space:]]", "", news_corpus)
+
+
+ndfm <- news_corpus %>% 
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE, verbose=FALSE) %>%
+  tokens_replace(pattern = "'", replacement = "", valuetype = "regex") %>%
+  tokens_replace(pattern = "#", replacement = "", valuetype = "regex") %>%
+tokens_remove(stopwords("en")) %>%
+  tokens_remove(pattern = "\\b\\d+[a-z]*\\b", valuetype = "regex") %>%
+  tokens_wordstem() %>%
+  tokens_select(min_nchar = 3) %>%
+  dfm() %>%
+  dfm_trim(min_termfreq = 10, min_docfreq = 5, verbose = FALSE)
+
+  
+# Grouping the DFM by subreddit
+news_dfm <- dfm_group(ndfm, group = all_news$news)
+```
+
+```{r}
+# Plot word cloud with adjusted parameters
+textplot_wordcloud(news_dfm, comparison = FALSE, labelcolor = "black", labelsize = 1, rotation = 0, 
+                   min_size = 0.5, max_size = 5, min_count = 5, max_words = 200)
+```
+
+```{r}
+# create a corpus
+reddit_corpus <- corpus(all_reddit$body, docvars = all_reddit[,c("day_of_year","subreddit")])
+
+reddit_corpus <- tolower(reddit_corpus)
+
+# remove non-ACSII characters
+reddit_corpus <- gsub("[^[:alnum:][:space:]]", "", reddit_corpus)
+
+
+rdfm <- reddit_corpus %>% 
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE, verbose=FALSE) %>%
+  tokens_replace(pattern = "'", replacement = "", valuetype = "regex") %>%
+  tokens_replace(pattern = "#", replacement = "", valuetype = "regex") %>%
+tokens_remove(stopwords("en")) %>%
+  tokens_remove(pattern = "\\b\\d+[a-z]*\\b", valuetype = "regex") %>%
+  tokens_wordstem() %>%
+  tokens_select(min_nchar = 3) %>%
+  dfm() %>%
+  dfm_trim(min_termfreq = 10, min_docfreq = 5, verbose = FALSE)
+```
+
+```{r}
+# Plot word cloud with adjusted parameters
+textplot_wordcloud(rdfm, labelcolor = "black", labelsize = 1, rotation = 0, 
+                   min_size = 0.5, max_size = 5, min_count = 5, max_words = 200)
+```
+
