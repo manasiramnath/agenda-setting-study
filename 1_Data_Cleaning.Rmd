@@ -1,0 +1,192 @@
+---
+title: "Data Preperation"
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading necessary libraries and data
+
+```{r}
+# load libraries
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(streamR)
+#install.packages('quanteda')
+library(quanteda)
+library(quanteda.textplots)
+#install.packages("word2vec")
+library(word2vec)
+#install.packages("tm")
+library(tm)
+#install.packages("stm")
+library(stm)
+#install.packages('wordcloud')
+library(wordcloud)
+```
+
+```{r}
+# load data
+all_news <- read.csv("news/all-news-summarised.csv")
+all_reddit <- read.csv("reddit/all-reddit.csv")
+```
+
+# Data Cleaning
+
+```{r}
+# reddit
+# keep only reddit comments (is_comment=1)
+r <- all_reddit %>% filter(is_comment == 1)
+## subreddits removal
+# removing subreddits
+to_remove <- c("uktrees", "beermoneyuk", "ContractorUK", "bigbrotheruk", "CANZUK", "ukmedicalcannabis", "BenefitsAdviceUK", "90DayFianceUK", "ukdrill", "FIREUK", "CarTalkUK", "transgenderUK", "AmericanExpatsUK", "LegalAdviceUK", "ukvisa", "DIYUK", "UniUK", "UKPersonalFinance","TeachingUK", "ADHDUK")
+r <- r %>% filter(!subreddit %in% to_remove)
+# remove rows with duplicate body text
+r <- r %>% distinct(body, .keep_all = TRUE)
+# remove u/AutoModerator
+r <- r %>% filter(user != "u/AutoModerator")
+# remove rows containing the following phrases
+r <- r %>% filter(!grepl("your post from", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("removed", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("appeal", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("mastercard", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("integration", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("detention", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("trans", body, ignore.case = TRUE))
+r <- r %>% filter(!grepl("tribunal", body, ignore.case = TRUE))
+
+# make table of subreddit with count of comments
+subreddit_counts <- r %>% group_by(subreddit) %>% summarise(n = n()) %>% arrange(desc(n))
+# remove rows with less than 100 comments in subreddit
+r <- r %>% filter(subreddit %in% subreddit_counts$subreddit[subreddit_counts$n >= 100])
+# export subreddit_counts to csv
+#write.csv(subreddit_counts, "subreddit_counts.csv", row.names = FALSE)
+
+```
+
+```{r}
+# print unique links count
+unique_links <- r %>% distinct(link, .keep_all = TRUE) %>% nrow()
+```
+
+```{r}
+# convert date to date format
+all_news$date <- as.Date(all_news$date)
+# keep only news from 2023
+all_news <- all_news %>% filter(year(date) == 2023)
+
+# make day of year a column
+all_news$day_of_year <- yday(all_news$date)
+
+all_news$news <- as.factor(all_news$news)
+```
+
+```{r}
+# get average length of reddit comment
+mean(nchar(all_reddit_comments$body))
+# get average length of news summary
+mean(nchar(all_news$body))
+```
+
+```{r}
+# extract the common part of the link
+df <- r %>%
+  mutate(common_link = sub("/[^/]+/?$", "", link))
+
+# count unique links
+unique_links <- df %>% distinct(common_link, .keep_all = TRUE) %>% nrow()
+
+# group by the common link and merge comments, retaining 'date' and 'subreddit'
+merged_comments <- df %>%
+  group_by(common_link) %>%
+  summarise(
+    body = paste(body, collapse = " "),
+    date = first(date),
+    score = first(score),
+    subreddit = first(subreddit)
+  )
+```
+
+```{r}
+subreddit_counts <- merged_comments %>% group_by(subreddit) %>% summarise(n = n()) %>% arrange(desc(n))
+write.csv(subreddit_counts, "subreddit_counts.csv", row.names = FALSE)
+```
+
+```{r}
+# rewrite all_news to csv
+write.csv(all_news, "news/all-news-final.csv", row.names = FALSE)
+# rewrite all_reddit_comments to csv
+write.csv(merged_comments, "reddit/all-reddit-final.csv", row.names = FALSE)
+```
+
+```{r}
+r <- read.csv("reddit/merged-reddit.csv")
+```
+
+## Creating News corpus
+
+```{r}
+# create a corpus
+news_corpus <- corpus(all_news$summary, docvars = all_news[,c("day_of_year","news")])
+
+news_corpus <- news_corpus %>% tolower() %>% stripWhitespace() %>% trimws()
+
+# define additional stopwords
+custom_stopwords <- c(stopwords_list, "reddit", "subreddit", "subreddits", "sub", "post", "comment", "comments", "posts", "thread", "threads", "user", "users", "people", "person", "askuk", "moderator", "mod", "moderators", "question", "questions", "questioning", "questionings", "answer", "include", "including", "includes", "lot", "remove", "removed", "removes", "removing")
+
+ndfm <- news_corpus %>% 
+  tokens(remove_url = TRUE, remove_numbers = TRUE, remove_punct = TRUE, verbose = FALSE) %>%
+  tokens_remove(custom_stopwords, valuetype = "fixed") %>%
+  tokens_replace(pattern = "#", replacement = "", valuetype = "regex") %>%
+  tokens_remove(pattern = "\\b\\d+[a-z]*\\b", valuetype = "regex") %>%
+  tokens_remove(pattern = "https", valuetype = "regex") %>%
+  tokens_remove(pattern = "[âîû]", valuetype = "regex") %>%
+  tokens_select(min_nchar = 3) %>%
+  tokens_ngrams(n=1:2) %>%
+  dfm() %>%
+  dfm_trim(min_termfreq = 10, min_docfreq = 5, verbose = FALSE)
+```
+
+### News wordcloud
+
+```{r}
+textplot_wordcloud(ndfm, comparison = FALSE, labelcolor = "black", labelsize = 1, rotation = 0, 
+                   min_size = 0.5, max_size = 5, min_count = 5, max_words = 200, color = "#008099")
+```
+
+## Creating Reddit corpus
+
+```{r}
+# Create a corpus
+reddit_corpus <- corpus(merged_comments$body, docvars = merged_comments[,c("date", "subreddit")])
+
+# Convert text to lowercase
+reddit_corpus <- tolower(reddit_corpus)
+
+# Define additional stopwords
+custom_stopwords <- c(stopwords_list, "uk", "reddit", "subreddit", "subreddits", "sub", "post", "comment", "comments","posts", "thread", "threads", "user", "users", "people", "person", "askuk", "moderator", "mod", "moderators", "question", "questions","questioning", "questionings", "answer", "include", "including", "includes", "lot", "remove", "removed", "removes", "removing","guide", "common", "messaging", "message", "messages", "appeal", "discussion", "discussions", "discuss", "discussing", "discussed", "diy", "survey", "surveys", "surveying", "subject", "issues", "overcome", "rule", "rules", "read", "search", "engine", "ranting", "vent", "vents", "vented", "venting", "advertising", "title", "light-hearted", "shitposts", "catch-all", "check", "sidebar", "specialised", "specialisation", "delete", "vent", "explicitly", "throwaway", "genuine", "non-genuine", "wikitravel", "tourist", "tripadvisor", "google", "visiting", "suggestions", "suggestion", "submission","submissions", "submit", "submitting", "submitted", "submitter", "easily", "online", "figure", "repetitive", "closed", "answered", "answers", "mark", "ensure", "understand")
+# Preprocess and create document-feature matrix
+rdfm <- reddit_corpus %>% 
+  tokens(remove_url = TRUE, remove_numbers = TRUE, remove_punct = TRUE, verbose = FALSE) %>%
+  tokens_remove(custom_stopwords, valuetype = "fixed") %>%
+  tokens_replace(pattern = "#", replacement = "", valuetype = "regex") %>%
+  tokens_remove(pattern = "\\b\\d+[a-z]*\\b", valuetype = "regex") %>%
+  tokens_remove(pattern = "https", valuetype = "regex") %>%
+  tokens_remove(pattern = "[âîû]", valuetype = "regex") %>%
+  tokens_select(min_nchar = 3) %>%
+  tokens_ngrams(n=1:2) %>%
+  dfm() %>%
+  dfm_trim(min_termfreq = 10, min_docfreq = 5, verbose = FALSE)
+```
+
+### Reddit wordcloud
+
+```{r}
+textplot_wordcloud(rdfm, labelcolor = "black", labelsize = 1, rotation = 0, 
+                   min_size = 0.5, max_size = 5, min_count = 5, max_words = 200, color = "#800000")
+```
